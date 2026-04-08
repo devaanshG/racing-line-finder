@@ -85,10 +85,15 @@ def main():
     centre = build_centreline()
     left, right = offset_path(centre, HALF_WIDTH)
 
-    out = Path(__file__).parent
-    pd.DataFrame(left, columns=["x", "y"]).round(4).to_csv(out / "left_cones.csv", index=False)
-    pd.DataFrame(right, columns=["x", "y"]).round(4).to_csv(out / "right_cones.csv", index=False)
-    print(f"Generated {len(centre)} gate pairs → left_cones.csv, right_cones.csv")
+    out = Path(__file__).parent / "track.csv"
+    df = pd.DataFrame({
+        "left_x":  np.round(left[:, 0], 4),
+        "left_y":  np.round(left[:, 1], 4),
+        "right_x": np.round(right[:, 0], 4),
+        "right_y": np.round(right[:, 1], 4),
+    })
+    df.to_csv(out, index=False)
+    print(f"Generated {len(centre)} gate pairs → {out}")
 
 
 if __name__ == "__main__":

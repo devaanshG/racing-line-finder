@@ -2,39 +2,44 @@
 Track module.
 
 Responsibilities:
-- Load left/right cone CSVs
-- Generate gates (paired left/right cones by row index)
+- Load track CSV (left_x, left_y, right_x, right_y per gate)
 - Compute the raw centerline path
 """
 
 import numpy as np
 import pandas as pd
 
+TRACK_COLUMNS = ["left_x", "left_y", "right_x", "right_y"]
 
-def load_cones(left_path: str, right_path: str) -> tuple[np.ndarray, np.ndarray]:
+
+def load_track(path: str) -> tuple[np.ndarray, np.ndarray]:
     """
-    Load and validate cone CSVs.
+    Load and validate a track CSV.
 
-    Each CSV must have columns 'x' and 'y'. Row i in the left CSV and row i in
-    the right CSV form gate i — no matching is performed.
+    Expected columns: left_x, left_y, right_x, right_y
+    Each row is one gate — left and right cone positions.
 
     Returns
     -------
     left_cones, right_cones : np.ndarray of shape (N, 2)
     """
-    left = pd.read_csv(left_path)[["x", "y"]].to_numpy(dtype=float)
-    right = pd.read_csv(right_path)[["x", "y"]].to_numpy(dtype=float)
-
-    if len(left) != len(right):
+    df = pd.read_csv(path)
+    missing = [c for c in TRACK_COLUMNS if c not in df.columns]
+    if missing:
         raise ValueError(
-            f"Cone count mismatch: left has {len(left)} rows, right has {len(right)}."
+            f"Track CSV missing columns: {missing}. "
+            f"Expected: {TRACK_COLUMNS}"
         )
+
+    left = df[["left_x", "left_y"]].to_numpy(dtype=float)
+    right = df[["right_x", "right_y"]].to_numpy(dtype=float)
+
     if len(left) < 3:
         raise ValueError(
             f"Need at least 3 gate pairs to define a track, got {len(left)}."
         )
     if np.any(~np.isfinite(left)) or np.any(~np.isfinite(right)):
-        raise ValueError("Cone data contains NaN or infinite values.")
+        raise ValueError("Track data contains NaN or infinite values.")
 
     return left, right
 
