@@ -7,6 +7,30 @@ Types: `DECISION`, `STAGE`, `FIX`, `DEPENDENCY`, `ASSUMPTION`
 
 ---
 
+## Stage 3 — DP Path Optimiser (2026-04-08)
+
+### STAGE — Stage 3 complete
+Deliverable: `python script.py` runs the DP optimiser and plots the raw optimised path (red) overlaid on the track boundaries and naive centerline (orange dashed).
+Files added/changed: `optimiser.py` (new), `visualiser.py` (dp_path overlay), `script.py` (wired in).
+
+### DECISION — Extended DP state: (gate, sample, prev_sample)
+Standard 2D state (gate, sample) cannot compute exact curvature cost because curvature at a node requires knowing the predecessor. Tracking prev_sample as part of the state gives exact 3-point curvature at every node with O(N_gates × N³) complexity.
+For N=11, G=100: ~133 k vectorised operations — effectively instant.
+**Alternative considered:** 2D DP with heuristic curvature from the last backtracked path. Rejected: adds a second pass and loses exactness.
+
+### DECISION — Curvature = inverse circumradius (3-point formula)
+κ = 4·area / (|AB|·|BC|·|CA|). Returns 0 for collinear points. Fully vectorised over the (Nk, Nj, Nl) index space using numpy broadcasting — no Python loops inside the curvature computation.
+
+### DECISION — Wrap-around curvature not penalised at Stage 3
+The DP is a linear pass (gate 0 → gate N-1). The curvature at the seam (gate N-1 → gate 0) is not included in the cost.
+**Impact:** slight sub-optimality at the start/finish on closed tracks.
+**Deferred to:** Stage 4 (smoothing naturally handles the loop closure).
+
+### DECISION — DP path verified in-bounds
+After optimisation, `max(offset - half_width) ≤ 0` is confirmed numerically. Nodes are constructed by linear interpolation so this holds by construction; the check is a regression guard.
+
+---
+
 ## Stage 2 — Gate Generation & Centerline (2026-04-08)
 
 ### STAGE — Stage 2 complete

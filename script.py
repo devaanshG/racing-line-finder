@@ -6,6 +6,7 @@ Orchestrates the pipeline: load → centerline → optimise → smooth → speed
 
 import argparse
 from track import load_track, gate_midpoints, gate_widths, is_loop_closed
+from optimiser import optimise
 from visualiser import plot_track
 
 
@@ -43,11 +44,23 @@ def main() -> None:
     print(f"Closed   : {closed}")
     print(f"Width    : min={widths.min():.2f}  mean={widths.mean():.2f}  max={widths.max():.2f}")
 
+    # --- Stage 3: DP optimiser ---
+    print(f"Running DP (N={args.n_samples}, w_len={args.w_len}, w_curve={args.w_curve}) …")
+    dp_path = optimise(
+        left_cones, right_cones,
+        n_samples=args.n_samples,
+        w_len=args.w_len,
+        w_curve=args.w_curve,
+    )
+    print(f"DP done  : path has {len(dp_path)} waypoints")
+
     plot_track(
         left_cones, right_cones,
         centerline=centerline,
+        dp_path=dp_path,
         closed=closed,
-        title=f"Track Map + Centerline — {len(left_cones)} gates",
+        title=f"Track Map — DP Path (N={args.n_samples}, "
+              f"w_len={args.w_len}, w_curve={args.w_curve})",
     )
 
 

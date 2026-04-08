@@ -3,8 +3,8 @@ Visualiser module.
 
 Responsibilities:
 - All matplotlib plotting lives here; no plt calls in other modules.
-- plot_track      : cone boundaries, gate lines, start marker.
-- plot_centerline : overlay the naive gate-midpoint centerline.
+- plot_track : cone boundaries, gate lines, start marker,
+               optional centerline and DP path overlays.
 """
 
 import numpy as np
@@ -19,6 +19,7 @@ _RIGHT_COLOUR      = "#f0c040"   # yellow (right boundary)
 _GATE_COLOUR       = "#aaaaaa"   # grey   (gate lines)
 _START_COLOUR      = "#2ca02c"   # green  (start marker)
 _CENTRELINE_COLOUR = "#ff7f0e"   # orange (naive centerline)
+_PATH_COLOUR       = "#e84040"   # red    (DP optimised path)
 
 
 def _closed(arr: np.ndarray) -> np.ndarray:
@@ -40,24 +41,23 @@ def _arrow_scale(left_cones: np.ndarray, right_cones: np.ndarray) -> float:
 
 
 def plot_track(
-    left_cones: np.ndarray,
+    left_cones:  np.ndarray,
     right_cones: np.ndarray,
-    centerline: np.ndarray | None = None,
-    closed: bool = True,
-    title: str = "Track Map",
+    centerline:  np.ndarray | None = None,
+    dp_path:     np.ndarray | None = None,
+    closed:      bool = True,
+    title:       str  = "Track Map",
 ) -> None:
     """
-    Plot cone boundaries, gate lines, start marker, and optionally the
-    naive gate-midpoint centerline.
+    Plot cone boundaries, gate lines, start marker, and optional overlays.
 
     Parameters
     ----------
     left_cones, right_cones : np.ndarray (N, 2)
-    centerline              : np.ndarray (N, 2) or None
-        If provided, the gate-midpoint centerline is overlaid.
-    closed : bool
-        If True, boundary lines and centerline close the loop.
-    title : str
+    centerline : np.ndarray (N, 2) or None — naive gate-midpoint centerline
+    dp_path    : np.ndarray (N, 2) or None — DP-optimised raw path
+    closed     : bool — close boundary lines and paths into a loop
+    title      : str
     """
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -85,15 +85,23 @@ def plot_track(
     if centerline is not None:
         cc = maybe_close(centerline)
         ax.plot(cc[:, 0], cc[:, 1],
-                color=_CENTRELINE_COLOUR, linewidth=1.8,
-                linestyle="--", alpha=0.85, zorder=4)
-        ax.scatter(centerline[:, 0], centerline[:, 1],
-                   c=_CENTRELINE_COLOUR, s=14, zorder=5, alpha=0.7)
+                color=_CENTRELINE_COLOUR, linewidth=1.5,
+                linestyle="--", alpha=0.6, zorder=4)
+
+    # DP path overlay
+    if dp_path is not None:
+        pp = maybe_close(dp_path)
+        ax.plot(pp[:, 0], pp[:, 1],
+                color=_PATH_COLOUR, linewidth=2.2, alpha=0.95, zorder=6)
+        ax.scatter(dp_path[:, 0], dp_path[:, 1],
+                   c=_PATH_COLOUR, s=16, zorder=7, alpha=0.85)
 
     # Start marker + heading arrow
+    ref = dp_path if dp_path is not None else (
+          centerline if centerline is not None else
+          (left_cones + right_cones) / 2.0)
     start = (left_cones[0] + right_cones[0]) / 2.0
-    h = _heading(centerline if centerline is not None
-                 else (left_cones + right_cones) / 2.0)
+    h = _heading(ref)
     scale = _arrow_scale(left_cones, right_cones)
 
     ax.scatter(*start, c=_START_COLOUR, s=130, zorder=6, marker="*")
@@ -112,7 +120,12 @@ def plot_track(
     if centerline is not None:
         legend_handles.append(
             mlines.Line2D([], [], color=_CENTRELINE_COLOUR,
-                          linewidth=1.8, linestyle="--", label="Centerline")
+                          linewidth=1.5, linestyle="--", label="Centerline", alpha=0.6)
+        )
+    if dp_path is not None:
+        legend_handles.append(
+            mlines.Line2D([], [], color=_PATH_COLOUR,
+                          linewidth=2.2, label="DP path")
         )
 
     ax.set_aspect("equal")
