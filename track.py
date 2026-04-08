@@ -3,7 +3,8 @@ Track module.
 
 Responsibilities:
 - Load track CSV (left_x, left_y, right_x, right_y per gate)
-- Compute the raw centerline path
+- Compute gate midpoints (naive centerline)
+- Compute gate widths and directions
 """
 
 import numpy as np
@@ -31,7 +32,7 @@ def load_track(path: str) -> tuple[np.ndarray, np.ndarray]:
             f"Expected: {TRACK_COLUMNS}"
         )
 
-    left = df[["left_x", "left_y"]].to_numpy(dtype=float)
+    left  = df[["left_x",  "left_y"]].to_numpy(dtype=float)
     right = df[["right_x", "right_y"]].to_numpy(dtype=float)
 
     if len(left) < 3:
@@ -50,3 +51,25 @@ def gate_midpoints(left_cones: np.ndarray, right_cones: np.ndarray) -> np.ndarra
     This is the naive centerline — no optimisation applied.
     """
     return (left_cones + right_cones) / 2.0
+
+
+def gate_widths(left_cones: np.ndarray, right_cones: np.ndarray) -> np.ndarray:
+    """Return the width of each gate (distance between left and right cone)."""
+    return np.linalg.norm(right_cones - left_cones, axis=1)
+
+
+def is_loop_closed(left_cones: np.ndarray, right_cones: np.ndarray,
+                   tol: float = None) -> bool:
+    """
+    Return True if the track forms a closed loop.
+
+    The track is considered closed when the first and last gate midpoints
+    are within `tol` of each other.  Default tolerance = 5% of the mean
+    gate-to-gate spacing along the centerline.
+    """
+    centre = gate_midpoints(left_cones, right_cones)
+    if tol is None:
+        spacings = np.linalg.norm(np.diff(centre, axis=0), axis=1)
+        tol = 5.0 * float(np.mean(spacings))
+    gap = np.linalg.norm(centre[-1] - centre[0])
+    return bool(gap < tol)

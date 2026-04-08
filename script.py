@@ -5,7 +5,7 @@ Orchestrates the pipeline: load → centerline → optimise → smooth → speed
 """
 
 import argparse
-from track import load_track
+from track import load_track, gate_midpoints, gate_widths, is_loop_closed
 from visualiser import plot_track
 
 
@@ -14,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="FSAE Track Path Optimiser",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--track",    default="data/track.csv",  help="Track CSV path")
+    p.add_argument("--track",     default="data/track.csv", help="Track CSV path")
 
     # Vehicle constraints (used from Stage 5 onward)
     p.add_argument("--a-lat",     type=float, default=12.0,  help="Max lateral acceleration (m/s²)")
@@ -32,10 +32,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    # --- Stage 1: Load & visualise ---
+    # --- Stage 1 & 2: Load, compute centerline, visualise ---
     left_cones, right_cones = load_track(args.track)
-    print(f"Loaded {len(left_cones)} gate pairs from '{args.track}'.")
-    plot_track(left_cones, right_cones)
+
+    closed = is_loop_closed(left_cones, right_cones)
+    centerline = gate_midpoints(left_cones, right_cones)
+    widths = gate_widths(left_cones, right_cones)
+
+    print(f"Loaded   : {len(left_cones)} gates from '{args.track}'")
+    print(f"Closed   : {closed}")
+    print(f"Width    : min={widths.min():.2f}  mean={widths.mean():.2f}  max={widths.max():.2f}")
+
+    plot_track(
+        left_cones, right_cones,
+        centerline=centerline,
+        closed=closed,
+        title=f"Track Map + Centerline — {len(left_cones)} gates",
+    )
 
 
 if __name__ == "__main__":

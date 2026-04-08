@@ -7,6 +7,26 @@ Types: `DECISION`, `STAGE`, `FIX`, `DEPENDENCY`, `ASSUMPTION`
 
 ---
 
+## Stage 2 — Gate Generation & Centerline (2026-04-08)
+
+### STAGE — Stage 2 complete
+Deliverable: `python script.py` now prints gate stats and plots the naive gate-midpoint centerline overlaid on the track boundaries.
+Files changed: `track.py` (new helpers), `visualiser.py` (centerline overlay), `script.py` (wires them together).
+
+### DECISION — Centerline = gate midpoints at Stage 2
+The naive centerline is simply `(left + right) / 2` at each gate. No smoothing or optimisation at this stage.
+**Rationale:** Provides a baseline path that is guaranteed to stay in bounds; the DP optimiser (Stage 3) will improve on it.
+
+### DECISION — Loop closure detected automatically
+`is_loop_closed()` compares the distance between first and last gate midpoints against 5× the mean gate spacing.
+**Rationale:** Avoids hardcoding the assumption; handles both open (autocross slalom) and closed (circuit) tracks without a CLI flag.
+
+### DECISION — `plot_track` extended with optional `centerline` parameter
+Rather than a separate `plot_centerline` function, the centerline is an optional overlay on the existing track plot.
+**Rationale:** Stage 1 output (no centerline) still works with the same call; Stage 2 just passes the extra array. Avoids duplicating the figure setup.
+
+---
+
 ## 2026-04-08
 
 ### DECISION — Cone pairing by row index
