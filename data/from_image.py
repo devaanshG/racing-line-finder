@@ -336,6 +336,42 @@ def _to_xy(pts: np.ndarray, img_h: int) -> np.ndarray:
 # Visualisation
 # ---------------------------------------------------------------------------
 
+def debug_mask(img: np.ndarray, mask: np.ndarray, track_rgb: np.ndarray,
+               tolerance: float) -> None:
+    """
+    Overlay the raw colour mask on the original image in red.
+    Use this to verify detection before the full pipeline runs.
+    """
+    # Build RGBA overlay: matched pixels → red, everything else → transparent
+    overlay = np.zeros((*img.shape[:2], 4), dtype=np.uint8)
+    overlay[mask] = [255, 0, 0, 180]   # red, semi-transparent
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    # Left: image + red overlay
+    axes[0].imshow(img.astype(np.uint8))
+    axes[0].imshow(overlay)
+    axes[0].set_title(
+        f"Red = detected pixels\n"
+        f"colour={track_rgb.astype(int)}  tolerance={tolerance:.0f}  "
+        f"matched={mask.sum():,} ({mask.sum()/mask.size:.1%})",
+        fontsize=10,
+    )
+    axes[0].axis("off")
+
+    # Right: just the mask in B&W so fine detail is visible
+    axes[1].imshow(mask, cmap="gray", interpolation="nearest")
+    axes[1].set_title("Raw mask (white = detected)", fontsize=10)
+    axes[1].axis("off")
+
+    fig.suptitle(
+        "DEBUG — close this window to continue (or Ctrl-C to abort)",
+        fontsize=11, color="darkred",
+    )
+    plt.tight_layout()
+    plt.show()
+
+
 def preview(img: np.ndarray, left: np.ndarray, right: np.ndarray,
             mode: str) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -387,6 +423,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Output directory for left_cones.csv / right_cones.csv")
     p.add_argument("--show", action="store_true",
                    help="Preview boundaries before saving")
+    p.add_argument("--debug", action="store_true",
+                   help="Show raw colour mask before running the pipeline "
+                        "(use this first when detection is wrong)")
     return p
 
 
@@ -426,6 +465,9 @@ def main() -> None:
         print("  Warning: >50% of image matched — try decreasing --tolerance "
               "or invert your colour choice (use background colour instead).",
               file=sys.stderr)
+
+    if args.debug:
+        debug_mask(img, mask, track_rgb, args.tolerance)
 
     # Step 3 — extract path(s)
     if args.mode == "outline":
