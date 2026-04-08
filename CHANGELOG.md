@@ -26,6 +26,14 @@ The DP is a linear pass (gate 0 → gate N-1). The curvature at the seam (gate N
 **Impact:** slight sub-optimality at the start/finish on closed tracks.
 **Deferred to:** Stage 4 (smoothing naturally handles the loop closure).
 
+### FIX — Replaced κ (circumradius inverse) with θ² (heading-change squared)
+Root cause: κ has units of 1/length, so for tracks in pixel coordinates the typical value is ~10⁻³. With w_len=1 and w_curve=0.5 the curvature cost was ~184× smaller than the length cost — the algorithm was effectively finding the shortest path only.
+θ² = (angle between incoming and outgoing vectors)² is dimensionless, ∈ [0, π²], and scales with neither coordinate units nor gate spacing. With w_curve=5.0 the costs are balanced (ratio ~5×), giving the DP real incentive to prefer smoother arcs.
+Confirmed behaviour: on a straight→corner→straight track the path correctly swings wide on the approach, hits the apex, then exits wide (classic racing line). On a pure circular arc, all gate positions have identical θ per gate (same angular step at any radius), so length correctly dominates — the inside arc is genuinely shorter and equally curved.
+
+### DECISION — Default w_curve raised from 0.5 to 5.0
+With θ²-based cost, w_curve is now comparable to w_len. 5.0 gives a strong racing-line bias without completely ignoring path length. Users can increase it further for more aggressive cornering or decrease it for a tighter (shorter) path.
+
 ### DECISION — DP path verified in-bounds
 After optimisation, `max(offset - half_width) ≤ 0` is confirmed numerically. Nodes are constructed by linear interpolation so this holds by construction; the check is a regression guard.
 

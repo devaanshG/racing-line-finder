@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Optimiser settings (used from Stage 3 onward)
     p.add_argument("--n-samples", type=int,   default=11,    help="DP gate resolution (samples per gate)")
     p.add_argument("--w-len",     type=float, default=1.0,   help="DP cost weight: path length")
-    p.add_argument("--w-curve",   type=float, default=0.5,   help="DP cost weight: curvature penalty")
+    p.add_argument("--w-curve",   type=float, default=5.0,   help="DP cost weight: heading-change² penalty (increase for wider arcs)")
 
     return p
 
