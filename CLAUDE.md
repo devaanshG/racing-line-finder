@@ -18,18 +18,17 @@ smoother.py         ← spline fitting, boundary violation check
 speed_profile.py    ← forward-backward velocity pass
 visualiser.py       ← all matplotlib plotting
 data/
-  left_cones.csv    ← left cone (x, y) coordinates, one per row
-  right_cones.csv   ← right cone (x, y) coordinates, one per row
+  track.csv         ← track definition: left_x, left_y, right_x, right_y per gate
 ```
 
 ## Input Format
 
-Both CSVs have the same number of rows. Row `i` in `left_cones.csv` and row `i` in `right_cones.csv` form a **gate pair** — no cone-matching logic is required.
+A single CSV with one row per gate. Each row defines the left and right cone positions for that gate.
 
 ```
-x,y
-1.0,0.0
-2.5,3.2
+left_x,left_y,right_x,right_y
+1.0,0.0,4.0,0.0
+2.5,3.2,5.5,3.0
 ...
 ```
 
@@ -49,7 +48,7 @@ Each stage produces a working, runnable deliverable.
 
 ## Design Decisions
 
-- **Cone pairing:** Input CSVs are pre-paired by row index. No matching algorithm needed.
+- **Cone pairing:** Single CSV with left/right columns per row. No matching algorithm needed.
 - **Curvature (DP stage):** 3-point finite difference — simple and sufficient for cost scoring.
 - **Smoothing:** Parametric cubic spline (`scipy.interpolate.splprep`) — handles closed loops.
 - **Speed profile:** Forward-backward pass. `v_max(s) = sqrt(a_lat / |κ|)`, clamped to `v_max`.
@@ -68,12 +67,11 @@ Each stage produces a working, runnable deliverable.
 
 ```bash
 # Minimal — uses defaults
-python script.py --left data/left_cones.csv --right data/right_cones.csv
+python script.py --track data/track.csv
 
 # Full options
 python script.py \
-  --left data/left_cones.csv \
-  --right data/right_cones.csv \
+  --track data/track.csv \
   --a-lat 12.0 \        # max lateral acceleration (m/s²)
   --v-max 15.0 \        # max speed (m/s)
   --wheelbase 1.55 \    # vehicle wheelbase (m)
