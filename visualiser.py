@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+from matplotlib.collections import LineCollection
 
 
 # --- Colours consistent across all plots ---
@@ -19,7 +20,8 @@ _RIGHT_COLOUR      = "#f0c040"   # yellow (right boundary)
 _GATE_COLOUR       = "#aaaaaa"   # grey   (gate lines)
 _START_COLOUR      = "#2ca02c"   # green  (start marker)
 _CENTRELINE_COLOUR = "#ff7f0e"   # orange (naive centerline)
-_PATH_COLOUR       = "#e84040"   # red    (DP optimised path)
+_PATH_COLOUR       = "#e84040"   # red    (DP path — solid fallback, no speed data)
+_SPEED_CMAP        = "plasma"    # colormap for speed-coloured path
 
 
 def _closed(arr: np.ndarray) -> np.ndarray:
@@ -41,12 +43,13 @@ def _arrow_scale(left_cones: np.ndarray, right_cones: np.ndarray) -> float:
 
 
 def plot_track(
-    left_cones:  np.ndarray,
-    right_cones: np.ndarray,
-    centerline:  np.ndarray | None = None,
-    dp_path:     np.ndarray | None = None,
-    closed:      bool = True,
-    title:       str  = "Track Map",
+    left_cones:    np.ndarray,
+    right_cones:   np.ndarray,
+    centerline:    np.ndarray | None = None,
+    dp_path:       np.ndarray | None = None,
+    speed_profile: np.ndarray | None = None,
+    closed:        bool = True,
+    title:         str  = "Track Map",
 ) -> None:
     """
     Plot cone boundaries, gate lines, start marker, and optional overlays.
@@ -54,10 +57,13 @@ def plot_track(
     Parameters
     ----------
     left_cones, right_cones : np.ndarray (N, 2)
-    centerline : np.ndarray (N, 2) or None — naive gate-midpoint centerline
-    dp_path    : np.ndarray (N, 2) or None — DP-optimised raw path
-    closed     : bool — close boundary lines and paths into a loop
-    title      : str
+    centerline    : np.ndarray (N, 2) or None — naive gate-midpoint centerline
+    dp_path       : np.ndarray (N, 2) or None — DP-optimised raw path
+    speed_profile : np.ndarray (N,)   or None — speed in m/s at each gate;
+                    when provided alongside dp_path the path is coloured by
+                    speed using the plasma colormap
+    closed        : bool — close boundary lines and paths into a loop
+    title         : str
     """
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -91,8 +97,20 @@ def plot_track(
     # DP path overlay
     if dp_path is not None:
         pp = maybe_close(dp_path)
-        ax.plot(pp[:, 0], pp[:, 1],
-                color=_PATH_COLOUR, linewidth=2.2, alpha=0.95, zorder=6)
+        if speed_profile is not None:
+            # Colour the path by speed using the plasma colormap
+            sp = np.append(speed_profile, speed_profile[0]) if closed else speed_profile
+            segments = np.stack([pp[:-1], pp[1:]], axis=1)          # (N, 2, 2)
+            seg_speeds = (sp[:-1] + sp[1:]) / 2.0                   # midpoint speed per segment
+            norm = plt.Normalize(vmin=sp.min(), vmax=sp.max())
+            lc = LineCollection(segments, cmap=_SPEED_CMAP, norm=norm,
+                                linewidth=2.2, zorder=6, alpha=0.95)
+            lc.set_array(seg_speeds)
+            ax.add_collection(lc)
+            fig.colorbar(lc, ax=ax, label="Speed (m/s)", fraction=0.03, pad=0.04)
+        else:
+            ax.plot(pp[:, 0], pp[:, 1],
+                    color=_PATH_COLOUR, linewidth=2.2, alpha=0.95, zorder=6)
         ax.scatter(dp_path[:, 0], dp_path[:, 1],
                    c=_PATH_COLOUR, s=16, zorder=7, alpha=0.85)
 
@@ -123,9 +141,10 @@ def plot_track(
                           linewidth=1.5, linestyle="--", label="Centerline", alpha=0.6)
         )
     if dp_path is not None:
+        label = "DP path (speed)" if speed_profile is not None else "DP path"
         legend_handles.append(
             mlines.Line2D([], [], color=_PATH_COLOUR,
-                          linewidth=2.2, label="DP path")
+                          linewidth=2.2, label=label)
         )
 
     ax.set_aspect("equal")
