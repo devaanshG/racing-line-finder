@@ -57,32 +57,45 @@ def offset_path(path: np.ndarray, width: float):
     return np.array(lefts), np.array(rights)
 
 
-def build_centreline() -> np.ndarray:
+def build_centreline(n_gates: int) -> np.ndarray:
     """
-    Assemble a closed centreline from straight and arc segments.
-    Gate density: roughly one gate every 1.5 m along each segment.
+    Assemble a closed centreline resampled to exactly n_gates points.
+    Layout: two straights + two hairpins.
     """
+    from scipy.interpolate import splprep, splev
+
+    # Build a dense base shape, then resample to the requested count
     points = []
 
-    # --- Bottom straight: west (-18, -8) → east (18, -8) ---
-    xs = np.linspace(-18, 18, 26, endpoint=False)
+    # Bottom straight: west (-18, -8) → east (18, -8)
+    xs = np.linspace(-18, 18, 60, endpoint=False)
     points.append(np.column_stack([xs, np.full_like(xs, -8.0)]))
 
-    # --- East hairpin: centre (18, 0), radius 8, from -π/2 → +π/2 ---
-    points.append(arc(18, 0, 8, -np.pi / 2, np.pi / 2, 18))
+    # East hairpin: centre (18, 0), radius 8
+    points.append(arc(18, 0, 8, -np.pi / 2, np.pi / 2, 40))
 
-    # --- Top straight: east (18, 8) → west (-18, 8) ---
-    xs = np.linspace(18, -18, 26, endpoint=False)
+    # Top straight: east (18, 8) → west (-18, 8)
+    xs = np.linspace(18, -18, 60, endpoint=False)
     points.append(np.column_stack([xs, np.full_like(xs, 8.0)]))
 
-    # --- West hairpin: centre (-18, 0), radius 8, from +π/2 → +3π/2 ---
-    points.append(arc(-18, 0, 8, np.pi / 2, 3 * np.pi / 2, 18))
+    # West hairpin: centre (-18, 0), radius 8
+    points.append(arc(-18, 0, 8, np.pi / 2, 3 * np.pi / 2, 40))
 
-    return np.vstack(points)
+    base = np.vstack(points)
+    tck, _ = splprep([base[:, 0], base[:, 1]], s=0, per=True, k=3)
+    u = np.linspace(0, 1, n_gates, endpoint=False)
+    x, y = splev(u, tck)
+    return np.column_stack([x, y])
 
 
 def main():
-    centre = build_centreline()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n-gates", type=int, default=88,
+                        help="Number of gates to generate (default: 88)")
+    args = parser.parse_args()
+
+    centre = build_centreline(args.n_gates)
     left, right = offset_path(centre, HALF_WIDTH)
 
     out = Path(__file__).parent / "track.csv"

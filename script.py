@@ -5,7 +5,7 @@ Orchestrates the pipeline: load → centerline → optimise → smooth → speed
 """
 
 import argparse
-from track import load_track, gate_midpoints, gate_widths, is_loop_closed
+from track import load_track, resample_track, gate_midpoints, gate_widths, is_loop_closed
 from optimiser import optimise
 from visualiser import plot_track
 
@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--c-drag",    type=float, default=0.5,   help="Drag coefficient × frontal area (kg/m)")
     p.add_argument("--wheelbase", type=float, default=1.55,  help="Vehicle wheelbase (m)")
 
+    # Gate count
+    p.add_argument("--resample-gates", type=int, default=None,
+                   help="Resample track to this many gates before running "
+                        "(e.g. 200). Uses cubic spline on both boundaries.")
+
     # Optimiser resolution
     p.add_argument("--n-samples", type=int,   default=11,    help="Lateral position samples per gate")
     p.add_argument("--n-vel",     type=int,   default=11,    help="Velocity grid resolution")
@@ -36,8 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    # --- Stage 1 & 2: Load, compute centerline ---
+    # --- Stage 1 & 2: Load, optionally resample, compute centerline ---
     left_cones, right_cones = load_track(args.track)
+    if args.resample_gates:
+        left_cones, right_cones = resample_track(left_cones, right_cones,
+                                                  args.resample_gates)
+        print(f"Resampled: {args.resample_gates} gates")
 
     closed     = is_loop_closed(left_cones, right_cones)
     centerline = gate_midpoints(left_cones, right_cones)

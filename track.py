@@ -9,6 +9,7 @@ Responsibilities:
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import splprep, splev
 
 TRACK_COLUMNS = ["left_x", "left_y", "right_x", "right_y"]
 
@@ -51,6 +52,30 @@ def gate_midpoints(left_cones: np.ndarray, right_cones: np.ndarray) -> np.ndarra
     This is the naive centerline — no optimisation applied.
     """
     return (left_cones + right_cones) / 2.0
+
+
+def resample_track(left_cones: np.ndarray, right_cones: np.ndarray,
+                   n: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Resample both track boundaries to exactly n evenly-spaced gates using
+    parametric cubic splines.  Preserves the closed-loop topology.
+
+    Parameters
+    ----------
+    left_cones, right_cones : np.ndarray (N, 2)
+    n : int — desired number of output gates
+
+    Returns
+    -------
+    left_out, right_out : np.ndarray (n, 2)
+    """
+    def _resample(pts: np.ndarray) -> np.ndarray:
+        tck, _ = splprep([pts[:, 0], pts[:, 1]], s=0, per=True, k=3)
+        u_new = np.linspace(0, 1, n, endpoint=False)
+        x, y = splev(u_new, tck)
+        return np.column_stack([x, y])
+
+    return _resample(left_cones), _resample(right_cones)
 
 
 def gate_widths(left_cones: np.ndarray, right_cones: np.ndarray) -> np.ndarray:
