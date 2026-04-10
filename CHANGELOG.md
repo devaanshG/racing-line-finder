@@ -7,6 +7,73 @@ Types: `DECISION`, `STAGE`, `FIX`, `DEPENDENCY`, `ASSUMPTION`
 
 ---
 
+## Stage 3 — Physics DP upgrade (2026-04-09)
+
+### STAGE — Stage 3 revised: geometric DP → physics DP
+State space changed from `(gate, lat, prev_lat)` to `(gate, lat, velocity)`.
+The objective is now minimum lap time in seconds, not a weighted proxy.
+Output extended from `path (G,2)` to `(path (G,2), speeds (G,))` — jointly optimal.
+Files changed: `optimiser.py` (full rewrite), `script.py` (new args, unpack tuple), `visualiser.py` (speed-coloured LineCollection overlay).
+
+### DECISION — Replace geometric cost with physics-based lap-time cost
+The previous `w_len·dist + w_curve·θ²` cost was dimensionless and required non-physical weight tuning. The physics DP minimises `Σ dist/v_avg` (total time in seconds) with hard penalty walls for infeasible transitions. All parameters now have physical meaning and can be measured from the car.
+
+### DECISION — State: (lat_j, vel_k) replaces (lat_j, prev_lat_k)
+`prev_lat` was needed to compute θ² at the current node. In the physics DP `velocity` serves the same role as the "memory" variable — needed to compute transition time and force demands — so no look-ahead is required. The state size is identical: N_lat × N_vel = 11 × 11 = 121 nodes per gate.
+
+### DECISION — Penalty values set to 1e6 seconds
+Following the referenced approach, infeasible transitions are penalised with 1e6 s (≈11.6 days). This makes them effectively unreachable without requiring hard pruning.
+Three penalties: PENALTY_DIRECTION (displacement opposes gate flow), PENALTY_FORCE for lateral accel > a_lat_max, and PENALTY_FORCE for longitudinal demand > a_lon_max.
+
+### DECISION — Curvature approximation: |sin α| / dist
+κ is approximated from the angle between the displacement vector B→C and the track forward direction. |sin α| is the cross-product magnitude, giving the lateral component per unit distance. Simpler than the 3-point circumradius and does not require the previous gate position.
+
+### DECISION — Drag included in longitudinal force budget
+Combined longitudinal demand = |Δv|/Δt + (c_drag/mass)·v_avg². If this exceeds a_lon_max the transition is penalised.
+New parameters: `--mass 230.0 kg`, `--c-drag 0.5 kg/m`.
+Default FSAE car values; documented here and in CLAUDE.md.
+
+### DECISION — Speed-coloured path via LineCollection
+When `speed_profile` is provided, `plot_track` renders the path as a `LineCollection` coloured by speed (colormap: plasma). Each segment's colour is the midpoint of the two endpoint speeds. A colorbar is added. Falls back to solid red when no speed data is provided.
+New import in `visualiser.py`: `matplotlib.collections.LineCollection`.
+
+### DECISION — Stage 5 forward-backward pass simplified
+With the physics DP outputting speeds directly, Stage 5 becomes a refinement/validation pass rather than a first-principles derivation. The `(x, y, v)` waypoints come from DP backtracking.
+
+---
+
+## Stage 3 — DP Path Optimiser (2026-04-08)
+
+### STAGE — Stage 3 complete
+Deliverable: `python script.py` runs the DP optimiser and plots the raw optimised path (red) overlaid on the track boundaries and naive centerline (orange dashed).
+Files added/changed: `optimiser.py` (new), `visualiser.py` (dp_path overlay), `script.py` (wired in).
+
+### DECISION — Extended DP state: (gate, sample, prev_sample)
+Standard 2D state (gate, sample) cannot compute exact curvature cost because curvature at a node requires knowing the predecessor. Tracking prev_sample as part of the state gives exact 3-point curvature at every node with O(N_gates × N³) complexity.
+For N=11, G=100: ~133 k vectorised operations — effectively instant.
+**Alternative considered:** 2D DP with heuristic curvature from the last backtracked path. Rejected: adds a second pass and loses exactness.
+
+### DECISION — Curvature = inverse circumradius (3-point formula)
+κ = 4·area / (|AB|·|BC|·|CA|). Returns 0 for collinear points. Fully vectorised over the (Nk, Nj, Nl) index space using numpy broadcasting — no Python loops inside the curvature computation.
+
+### DECISION — Wrap-around curvature not penalised at Stage 3
+The DP is a linear pass (gate 0 → gate N-1). The curvature at the seam (gate N-1 → gate 0) is not included in the cost.
+**Impact:** slight sub-optimality at the start/finish on closed tracks.
+**Deferred to:** Stage 4 (smoothing naturally handles the loop closure).
+
+### FIX — Replaced κ (circumradius inverse) with θ² (heading-change squared)
+Root cause: κ has units of 1/length, so for tracks in pixel coordinates the typical value is ~10⁻³. With w_len=1 and w_curve=0.5 the curvature cost was ~184× smaller than the length cost — the algorithm was effectively finding the shortest path only.
+θ² = (angle between incoming and outgoing vectors)² is dimensionless, ∈ [0, π²], and scales with neither coordinate units nor gate spacing. With w_curve=5.0 the costs are balanced (ratio ~5×), giving the DP real incentive to prefer smoother arcs.
+Confirmed behaviour: on a straight→corner→straight track the path correctly swings wide on the approach, hits the apex, then exits wide (classic racing line). On a pure circular arc, all gate positions have identical θ per gate (same angular step at any radius), so length correctly dominates — the inside arc is genuinely shorter and equally curved.
+
+### DECISION — Default w_curve raised from 0.5 to 5.0
+With θ²-based cost, w_curve is now comparable to w_len. 5.0 gives a strong racing-line bias without completely ignoring path length. Users can increase it further for more aggressive cornering or decrease it for a tighter (shorter) path.
+
+### DECISION — DP path verified in-bounds
+After optimisation, `max(offset - half_width) ≤ 0` is confirmed numerically. Nodes are constructed by linear interpolation so this holds by construction; the check is a regression guard.
+
+---
+
 ## Stage 2 — Gate Generation & Centerline (2026-04-08)
 
 ### STAGE — Stage 2 complete
