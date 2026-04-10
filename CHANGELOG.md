@@ -7,6 +7,41 @@ Types: `DECISION`, `STAGE`, `FIX`, `DEPENDENCY`, `ASSUMPTION`
 
 ---
 
+## Stage 3 — Physics DP upgrade (2026-04-09)
+
+### STAGE — Stage 3 revised: geometric DP → physics DP
+State space changed from `(gate, lat, prev_lat)` to `(gate, lat, velocity)`.
+The objective is now minimum lap time in seconds, not a weighted proxy.
+Output extended from `path (G,2)` to `(path (G,2), speeds (G,))` — jointly optimal.
+Files changed: `optimiser.py` (full rewrite), `script.py` (new args, unpack tuple), `visualiser.py` (speed-coloured LineCollection overlay).
+
+### DECISION — Replace geometric cost with physics-based lap-time cost
+The previous `w_len·dist + w_curve·θ²` cost was dimensionless and required non-physical weight tuning. The physics DP minimises `Σ dist/v_avg` (total time in seconds) with hard penalty walls for infeasible transitions. All parameters now have physical meaning and can be measured from the car.
+
+### DECISION — State: (lat_j, vel_k) replaces (lat_j, prev_lat_k)
+`prev_lat` was needed to compute θ² at the current node. In the physics DP `velocity` serves the same role as the "memory" variable — needed to compute transition time and force demands — so no look-ahead is required. The state size is identical: N_lat × N_vel = 11 × 11 = 121 nodes per gate.
+
+### DECISION — Penalty values set to 1e6 seconds
+Following the referenced approach, infeasible transitions are penalised with 1e6 s (≈11.6 days). This makes them effectively unreachable without requiring hard pruning.
+Three penalties: PENALTY_DIRECTION (displacement opposes gate flow), PENALTY_FORCE for lateral accel > a_lat_max, and PENALTY_FORCE for longitudinal demand > a_lon_max.
+
+### DECISION — Curvature approximation: |sin α| / dist
+κ is approximated from the angle between the displacement vector B→C and the track forward direction. |sin α| is the cross-product magnitude, giving the lateral component per unit distance. Simpler than the 3-point circumradius and does not require the previous gate position.
+
+### DECISION — Drag included in longitudinal force budget
+Combined longitudinal demand = |Δv|/Δt + (c_drag/mass)·v_avg². If this exceeds a_lon_max the transition is penalised.
+New parameters: `--mass 230.0 kg`, `--c-drag 0.5 kg/m`.
+Default FSAE car values; documented here and in CLAUDE.md.
+
+### DECISION — Speed-coloured path via LineCollection
+When `speed_profile` is provided, `plot_track` renders the path as a `LineCollection` coloured by speed (colormap: plasma). Each segment's colour is the midpoint of the two endpoint speeds. A colorbar is added. Falls back to solid red when no speed data is provided.
+New import in `visualiser.py`: `matplotlib.collections.LineCollection`.
+
+### DECISION — Stage 5 forward-backward pass simplified
+With the physics DP outputting speeds directly, Stage 5 becomes a refinement/validation pass rather than a first-principles derivation. The `(x, y, v)` waypoints come from DP backtracking.
+
+---
+
 ## Stage 3 — DP Path Optimiser (2026-04-08)
 
 ### STAGE — Stage 3 complete
