@@ -3,7 +3,7 @@ Optimiser module.
 
 Responsibilities:
 - Discretise each gate into N_lat candidate positions
-- Build a 3D node graph: (gate, lateral_position, velocity)
+- Build a physics-based graph: (gate, lateral_position, velocity)
 - Solve for the minimum lap-time path using dynamic programming
 - Return the optimal path (N_gates, 2) and speed profile (N_gates,)
 
@@ -14,35 +14,35 @@ has a real cost in seconds:
 
     transition_time = dist(B[j], C[l]) / v_avg(vel_k, vel_m)
 
-Infeasible transitions are penalised with PENALTY_DIRECTION / PENALTY_FORCE
-(1e6 s each), making them effectively unreachable:
+Infeasible transitions are penalised with PENALTY (1e6 s each):
 
   1. Direction penalty  — displacement B[j]→C[l] must point in the forward
      half-plane (dot with gate-to-gate direction > COS_ANGLE_LIMIT).
-     Prevents the path cutting hard across the track against the flow.
 
-  2. Lateral accel penalty — v_avg² · κ > a_lat_max  (grip limit exceeded).
-     κ is approximated from the cross-track angle of the displacement vector
-     relative to the forward gate direction.
+  2. Lateral accel penalty — v_avg² / R > a_lat_max  (grip limit exceeded).
+     R is the circumradius of the triangle A[p]→B[j]→C[l], computed from
+     the actual path nodes.  This varies per (p,j,l): outer arc = large R =
+     higher corner speed = less time → the racing line emerges naturally.
 
-  3. Longitudinal penalty — (|Δv| / Δt) + (c_drag/mass)·v_avg² > a_lon_max
-     (combined engine/braking + drag demand exceeds capability).
+  3. Longitudinal + drag penalty — |Δv|/Δt + (c_drag/mass)·v_avg² > a_lon_max.
 
 Algorithm
 ---------
-State:   (lat_j, vel_k) — 2D DP table per gate, size N_lat × N_vel.
-  dp[j, k] = minimum time accumulated to arrive at the current gate
-             at lateral position j with speed k.
+State:   (lat_j, vel_k, prev_lat_p) — 3D DP table per gate, N_lat × N_vel × N_lat.
+  dp[j, k, p] = minimum time accumulated to arrive at the current gate
+                at lateral position j, speed k, having come from position p.
 
-Forward DP recurrence (fully vectorised, no Python loop over transitions):
-  total[j, l, k, m] = dp[j, k] + seg_time[j,l,k,m] + penalties
-  dp_new[l, m]      = min over (j, k) of total[j, l, k, m]
+Tracking prev_lat enables the exact 3-point path curvature A[p]→B[j]→C[l]
+without any look-ahead.  The racing line emerges because:
+  - Inside hug: small circumradius → high κ → low speed limit → more time
+  - Wide arc:   large circumradius → low κ → high speed limit → less time
 
-Complexity: O(N_gates × N_lat² × N_vel²)
-  At N_lat = N_vel = 11, G = 100: ~1.43 M numpy ops, < 50 ms.
+Transitions per gate: N_lat × N_vel × N_lat × N_vel = N_lat² × N_vel²
+Complexity: O(N_gates × N_lat³ × N_vel²)
+  At N_lat=N_vel=11, G=100: ~16 M numpy ops, < 1 s.
 
-Backtracking: pred[gate, l, m] = (prev_j, prev_k) recovers both the
-path and the speed profile in a single pass.
+Backtracking: pred[gate, l, m, j] = (p_prev, k_prev) recovers both the
+path and the speed profile.
 """
 
 import numpy as np
@@ -55,7 +55,7 @@ N_VEL_DEFAULT:     int   = 11
 V_MIN_DEFAULT:     float = 1.0    # m/s — floor of velocity grid; must be > 0
 V_MAX_DEFAULT:     float = 15.0   # m/s
 A_LAT_DEFAULT:     float = 12.0   # m/s²
-A_LON_DEFAULT:     float = 8.0    # m/s²  (combined engine + braking capability)
+A_LON_DEFAULT:     float = 8.0    # m/s²
 MASS_DEFAULT:      float = 230.0  # kg    (typical FSAE car incl. driver)
 C_DRAG_DEFAULT:    float = 0.5    # kg/m  (aerodynamic drag: c_d × frontal area)
 
@@ -128,42 +128,40 @@ def optimise(
 
     vel_grid = np.linspace(v_min, v_max, n_vel)   # (N_vel,)
 
-    # Pre-compute gate-to-gate forward unit vectors (for direction penalty)
+    # Gate midpoints → forward direction unit vectors (for direction penalty)
     midpoints = (left + right) / 2.0              # (G, 2)
     fwd_vecs  = np.diff(midpoints, axis=0)         # (G-1, 2)
     fwd_norms = np.linalg.norm(fwd_vecs, axis=1, keepdims=True)
     fwd_unit  = fwd_vecs / np.where(fwd_norms > 1e-12, fwd_norms, 1.0)  # (G-1, 2)
 
-    # Pre-compute track curvature κ at each gate from the centerline midpoints.
-    # κ[i] = 2·|AB × BC| / (|AB|·|BC|·|AC|)  — inverse circumradius of A, B, C.
-    # This is the curvature the car must negotiate regardless of its lateral
-    # position within the gate.  Indices: κ is defined for gates 1..G-2;
-    # gates 0 and G-1 use their neighbours' values (boundary extrapolation).
-    kappa_gate = np.zeros(G, dtype=np.float64)
+    # Fallback curvature from the track centreline — used only for the
+    # first gate (i=0) where there is no previous gate to form a 3-point arc.
+    kappa_center = np.zeros(G, dtype=np.float64)
     for gi in range(1, G - 1):
         A, B, C = midpoints[gi - 1], midpoints[gi], midpoints[gi + 1]
-        AB = B - A;  BC = C - B;  AC = C - A
+        AB, BC, AC = B - A, C - B, C - A
         cross = abs(AB[0] * BC[1] - AB[1] * BC[0])
         denom = np.linalg.norm(AB) * np.linalg.norm(BC) * np.linalg.norm(AC)
-        kappa_gate[gi] = 2.0 * cross / denom if denom > 1e-12 else 0.0
-    kappa_gate[0]     = kappa_gate[1]
-    kappa_gate[G - 1] = kappa_gate[G - 2]
+        kappa_center[gi] = 2.0 * cross / denom if denom > 1e-12 else 0.0
+    kappa_center[0]     = kappa_center[1]
+    kappa_center[G - 1] = kappa_center[G - 2]
 
-    # v_avg[k, m] = average speed of a transition from vel k to vel m
-    v_avg = (vel_grid[:, np.newaxis] + vel_grid[np.newaxis, :]) / 2.0   # (N_vel, N_vel)
-
-    # Longitudinal drag deceleration at each speed pair: a_drag = (c_drag/mass) * v_avg²
-    a_drag = (c_drag / mass) * v_avg ** 2          # (N_vel, N_vel)
-
-    # |Δv| between every pair of velocity grid points
-    dv = np.abs(vel_grid[np.newaxis, :] - vel_grid[:, np.newaxis])       # (N_vel, N_vel)
+    # Pre-compute velocity-pair products (reused every gate)
+    v_avg  = (vel_grid[:, np.newaxis] + vel_grid[np.newaxis, :]) / 2.0   # (k, m)
+    a_drag = (c_drag / mass) * v_avg ** 2                                  # (k, m)
+    dv     = np.abs(vel_grid[np.newaxis, :] - vel_grid[:, np.newaxis])    # (k, m)
 
     # ------------------------------------------------------------------
-    # Initialise: all nodes at gate 0 are reachable at cost 0.
-    # The car can start anywhere on the first gate at any speed.
+    # Initialise: all states at gate 0 have cost 0.
+    # State: dp[j, k, p] — current lat j, current vel k, prev lat p.
+    # At the start, prev_lat is fictitious; we allow all combinations.
     # ------------------------------------------------------------------
-    dp   = np.zeros((n_lat, n_vel), dtype=np.float64)
-    pred = np.full((G, n_lat, n_vel, 2), -1, dtype=np.int32)
+    dp   = np.zeros((n_lat, n_vel, n_lat), dtype=np.float64)
+    # pred[gate, l, m, j] = (p_prev, k_prev)
+    #   l, m = chosen lat/vel at this gate
+    #   j    = prev_lat (= lat at previous gate)
+    #   p_prev = lat two gates back, k_prev = vel at previous gate
+    pred = np.full((G, n_lat, n_vel, n_lat, 2), -1, dtype=np.int32)
 
     # ------------------------------------------------------------------
     # Forward DP: gate i → gate i+1  for i = 0 … G-2
@@ -174,77 +172,120 @@ def optimise(
 
         # --- Segment geometry ----------------------------------------
         # diff_jl[j, l] = vector from B[j] to C[l]
-        diff_jl = C[np.newaxis, :, :] - B[:, np.newaxis, :]   # (N_lat_j, N_lat_l, 2)
-        dist    = np.linalg.norm(diff_jl, axis=-1)             # (N_lat_j, N_lat_l)
+        diff_jl   = C[np.newaxis, :, :] - B[:, np.newaxis, :]   # (j, l, 2)
+        dist      = np.linalg.norm(diff_jl, axis=-1)             # (j, l)
         dist_safe = np.where(dist > 1e-12, dist, 1.0)
 
         # --- Direction penalty ----------------------------------------
-        # Displacement unit vector for each (j→l) pair
-        disp_unit = diff_jl / dist_safe[:, :, np.newaxis]      # (N_lat_j, N_lat_l, 2)
+        disp_unit = diff_jl / dist_safe[:, :, np.newaxis]        # (j, l, 2)
         dot_fwd   = np.sum(
             disp_unit * fwd_unit[i][np.newaxis, np.newaxis, :], axis=-1
-        )                                                        # (N_lat_j, N_lat_l)
-        dir_pen = np.where(dot_fwd < COS_ANGLE_LIMIT, PENALTY_DIRECTION, 0.0)
+        )                                                          # (j, l)
+        dir_pen   = np.where(dot_fwd < COS_ANGLE_LIMIT, PENALTY_DIRECTION, 0.0)
 
         # --- Transition time -----------------------------------------
         # seg_time[j, l, k, m] = dist[j,l] / v_avg[k,m]
-        seg_time = (dist[:, :, np.newaxis, np.newaxis]
-                    / v_avg[np.newaxis, np.newaxis, :, :])      # (j, l, k, m)
+        seg_time  = (dist[:, :, np.newaxis, np.newaxis]
+                     / v_avg[np.newaxis, np.newaxis, :, :])       # (j, l, k, m)
 
         # --- Lateral acceleration penalty ----------------------------
-        # Use the pre-computed track curvature κ at the current gate.
-        # The centripetal acceleration v²·κ must not exceed a_lat_max.
-        # κ is the same for all (j, l) pairs at a given gate — it measures
-        # the curvature of the track itself at this location.
-        a_lat_req = v_avg ** 2 * kappa_gate[i]                  # (N_vel_k, N_vel_m)
-        lat_pen   = np.where(a_lat_req > a_lat_max, PENALTY_FORCE, 0.0)
-        # Broadcast to (j, l, k, m) — same penalty for all lateral pairs at this gate
-        lat_pen   = lat_pen[np.newaxis, np.newaxis, :, :]
+        # For gate i > 0: use the exact circumradius R of the triangle
+        #   A[p] = nodes[i-1][p],  B[j] = nodes[i][j],  C[l] = nodes[i+1][l]
+        # R[p,j,l] = |AB|·|BC|·|CA| / (2·|AB×BC|)
+        # a_lat = v_avg² / R  →  penalise if > a_lat_max
+        #
+        # This is where the racing line emerges: the outer arc through a
+        # corner has a larger R (smaller κ), allowing higher speed, so
+        # the DP favours wide-entry → apex → wide-exit paths.
+        #
+        # For gate i = 0 there is no gate i-1, so fall back to the
+        # track centreline curvature (same for all lateral positions).
+        if i > 0:
+            A = nodes[i - 1]                                           # (N_lat_p, 2)
+
+            AB = B[np.newaxis, :, :] - A[:, np.newaxis, :]            # (p, j, 2)
+            AC = C[np.newaxis, :, :] - A[:, np.newaxis, :]            # (p, l, 2)
+
+            AB_len = np.linalg.norm(AB, axis=-1)                      # (p, j)
+            AC_len = np.linalg.norm(AC, axis=-1)                      # (p, l)
+
+            # Cross product |AB[p,j] × BC[j,l]|  →  (p, j, l)
+            AB_exp = AB[:, :, np.newaxis, :]                           # (p, j, 1, 2)
+            BC_exp = diff_jl[np.newaxis, :, :, :]                     # (1, j, l, 2)
+            cross  = np.abs(
+                AB_exp[:, :, :, 0] * BC_exp[:, :, :, 1]
+                - AB_exp[:, :, :, 1] * BC_exp[:, :, :, 0]
+            )                                                          # (p, j, l)
+
+            # Circumradius: R = |AB|·|BC|·|AC| / (2·|AB×BC|)
+            numer  = (AB_len[:, :, np.newaxis]
+                      * dist[np.newaxis, :, :]
+                      * AC_len[:, np.newaxis, :])                      # (p, j, l)
+            R      = np.where(cross > 1e-12, numer / cross, 1e9)      # large R → straight
+            kappa  = 1.0 / R                                           # (p, j, l)
+
+            # a_lat[p, j, l, k, m] = v_avg[k,m]² · κ[p,j,l]
+            a_lat_req = (kappa[:, :, :, np.newaxis, np.newaxis]
+                         * v_avg[np.newaxis, np.newaxis, np.newaxis, :, :] ** 2)
+            lat_pen   = np.where(
+                a_lat_req > a_lat_max, PENALTY_FORCE, 0.0
+            )                                                          # (p, j, l, k, m)
+        else:
+            # No previous gate: use track centreline curvature.
+            a_lat_req = v_avg ** 2 * kappa_center[i]                  # (k, m)
+            lat_pen   = np.where(
+                a_lat_req > a_lat_max, PENALTY_FORCE, 0.0
+            )[np.newaxis, np.newaxis, np.newaxis, :, :]                # (1, 1, 1, k, m)
 
         # --- Longitudinal + drag penalty -----------------------------
-        # Combined demand: acceleration needed for Δv + drag resistance
-        #   a_lon_demand = |Δv| / seg_time + (c_drag/mass) · v_avg²
-        # If this exceeds a_lon_max (engine/braking capability), penalise.
         a_lon_demand = (dv[np.newaxis, np.newaxis, :, :]
                         / np.where(seg_time > 1e-12, seg_time, 1.0)
-                        + a_drag[np.newaxis, np.newaxis, :, :]) # (j, l, k, m)
-        lon_pen = np.where(a_lon_demand > a_lon_max, PENALTY_FORCE, 0.0)
+                        + a_drag[np.newaxis, np.newaxis, :, :])       # (j, l, k, m)
+        lon_pen      = np.where(a_lon_demand > a_lon_max, PENALTY_FORCE, 0.0)
 
-        # --- Total cost tensor ---------------------------------------
-        # total[j, l, k, m] = dp[j,k] + seg_time + all penalties
-        total = (dp[:, np.newaxis, :, np.newaxis]
-                 + seg_time
-                 + dir_pen[:, :, np.newaxis, np.newaxis]
-                 + lat_pen
-                 + lon_pen)
+        # --- Total cost tensor  (p, j, l, k, m) ---------------------
+        # dp[j, k, p] transposed → (p, j, k) for broadcasting
+        dp_t = dp.transpose(2, 0, 1)                                   # (p, j, k)
 
-        # --- Minimise over (j, k) → new dp[l, m] --------------------
-        # Transpose to (N_lat_l, N_vel_m, N_lat_j, N_vel_k) so we can
-        # argmin over the last two axes, which correspond to (j, k).
-        total_t  = total.transpose(1, 3, 0, 2)
-        flat     = total_t.reshape(n_lat, n_vel, -1)
-        dp       = flat.min(axis=-1)                            # (N_lat_l, N_vel_m)
-        flat_idx = flat.argmin(axis=-1)                         # (N_lat_l, N_vel_m)
+        total = (
+            dp_t[:, :, np.newaxis, :, np.newaxis]                     # (p, j, 1, k, 1)
+            + seg_time[np.newaxis, :, :, :, :]                        # (1, j, l, k, m)
+            + lat_pen                                                  # (p, j, l, k, m)
+            + lon_pen[np.newaxis, :, :, :, :]                         # (1, j, l, k, m)
+            + dir_pen[np.newaxis, :, :, np.newaxis, np.newaxis]       # (1, j, l, 1, 1)
+        )                                                              # (p, j, l, k, m)
 
-        pred[i + 1, :, :, 0] = flat_idx // n_vel               # best prev_lat for each (l, m)
-        pred[i + 1, :, :, 1] = flat_idx  % n_vel               # best prev_vel for each (l, m)
+        # --- Minimise over (p, k) → new dp[l, m, j] -----------------
+        # j becomes the new prev_lat for the next gate.
+        # Transpose to (l, m, j, p, k) → reduce over last 2 dims.
+        total_t  = total.transpose(2, 4, 1, 0, 3)                     # (l, m, j, p, k)
+        flat     = total_t.reshape(n_lat, n_vel, n_lat, -1)           # (l, m, j, p*k)
+
+        dp       = flat.min(axis=-1)                                   # (l, m, j)
+        flat_idx = flat.argmin(axis=-1)                                # (l, m, j)
+
+        pred[i + 1, :, :, :, 0] = flat_idx // n_vel                   # p_prev index
+        pred[i + 1, :, :, :, 1] = flat_idx  % n_vel                   # k_prev index
 
     # ------------------------------------------------------------------
-    # Backtrack: walk pred to recover lat and vel index at every gate
+    # Backtrack: recover lat_idx and vel_idx for every gate
+    # dp shape at G-1: (N_lat_l, N_vel_m, N_lat_j_prev)
     # ------------------------------------------------------------------
     lat_idx = np.empty(G, dtype=np.int32)
     vel_idx = np.empty(G, dtype=np.int32)
 
-    l_curr, m_curr = np.unravel_index(int(np.argmin(dp)), dp.shape)
-    lat_idx[G - 1] = l_curr
-    vel_idx[G - 1] = m_curr
+    l, m, j = np.unravel_index(int(np.argmin(dp)), dp.shape)
+    lat_idx[G - 1] = l   # lat at final gate
+    vel_idx[G - 1] = m   # vel at final gate
+    lat_idx[G - 2] = j   # lat at penultimate gate (= prev_lat of final state)
 
-    for i in range(G - 1, 0, -1):
-        j_prev = int(pred[i, l_curr, m_curr, 0])
-        k_prev = int(pred[i, l_curr, m_curr, 1])
-        lat_idx[i - 1] = j_prev
-        vel_idx[i - 1] = k_prev
-        l_curr, m_curr = j_prev, k_prev
+    for gate_i in range(G - 1, 0, -1):
+        p = int(pred[gate_i, l, m, j, 0])   # lat two gates back
+        k = int(pred[gate_i, l, m, j, 1])   # vel at previous gate
+        vel_idx[gate_i - 1] = k
+        if gate_i >= 2:
+            lat_idx[gate_i - 2] = p
+        l, m, j = j, k, p
 
     path   = np.array([nodes[i, lat_idx[i]] for i in range(G)])
     speeds = vel_grid[vel_idx]
